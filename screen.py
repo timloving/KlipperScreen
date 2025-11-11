@@ -62,6 +62,7 @@ class KlipperScreen(Gtk.Window):
     connected_printer = None
     files = None
     keyboard = None
+    keyboard_cache = {}
     panels = {}
     popup_message = None
     printers = None
@@ -109,9 +110,12 @@ class KlipperScreen(Gtk.Window):
         self.display_number = os.environ.get('DISPLAY') or ':0'
         logging.debug(f"Display for xset: {self.display_number}")
         monitor_amount = Gdk.Display.get_n_monitors(display)
-        for i in range(monitor_amount):
-            m = display.get_monitor(i)
-            logging.info(f"Screen {i}: {m.get_geometry().width}x{m.get_geometry().height}")
+        if (monitor_amount):
+            for i in range(monitor_amount):
+                m = display.get_monitor(i)
+                logging.info(f"Screen {i}: {m.get_geometry().width}x{m.get_geometry().height}")
+        else:
+            logging.warning(f"WARNING: No monitors detected by Gdk")
         try:
             mon_n = int(args.monitor)
             if not (-1 < mon_n < monitor_amount):
@@ -187,7 +191,7 @@ class KlipperScreen(Gtk.Window):
     def state_execute(self, state, callback):
         self.screensaver.close()
         if 'printer_select' in self._cur_panels:
-            logging.debug(f"Connected printer chaged {state}")
+            logging.debug(f"Connected printer changed {state}")
             return False
         if state in ("printing", "paused"):
             self.set_screenblanking_timeout(self._config.get_main_config().get('screen_blanking_printing'))
@@ -786,7 +790,7 @@ class KlipperScreen(Gtk.Window):
     def toggle_shortcut(self, show):
         if show and not self.printer.get_printer_status_data()["printer"]["gcode_macros"]["count"] > 0:
             self.show_popup_message(
-                _("No elegible macros:") + "\n"
+                _("No eligible macros:") + "\n"
                 + _("macros with a name starting with '_' are hidden") + "\n"
                 + _("macros that use 'rename_existing' are hidden") + "\n"
                 + _("LOAD_FILAMENT/UNLOAD_FILAMENT are hidden and should be used from extrude") + "\n"
@@ -1234,12 +1238,22 @@ class KlipperScreen(Gtk.Window):
             kbd_grid.set_column_homogeneous(True)
             kbd_width = 2 if purpose == Gtk.InputPurpose.DIGITS else 3
         kbd_grid.attach(Gtk.Box(), 0, 0, 1, 1)
-        kbd = Keyboard(self, close_cb, entry=entry, box=box)
+        kbd = self._get_keyboard(entry.get_input_purpose())
+        kbd.reinit(close_cb=close_cb, entry=entry, box=box)
         kbd_grid.attach(kbd, 1, 0, kbd_width, 1)
         kbd_grid.attach(Gtk.Box(), kbd_width + 1, 0, 1, 1)
-        self.keyboard = {"box": kbd_grid}
+        self.keyboard = {
+            "box": kbd_grid,
+            "kbd": kbd
+        }
         box.pack_end(kbd_grid, False, False, 0)
         box.show_all()
+
+    def _get_keyboard(self, input_purpose):
+        if input_purpose in self.keyboard_cache:
+            return self.keyboard_cache[input_purpose]
+        k = self.keyboard_cache[input_purpose] = Keyboard(self, lambda *args, **kwargs: None, purpose=input_purpose)
+        return k
 
     def _show_matchbox_keyboard(self, kbd_grid):
         env = os.environ.copy()
@@ -1276,6 +1290,8 @@ class KlipperScreen(Gtk.Window):
             box = self.base_panel.content
         if 'process' in self.keyboard:
             os.kill(self.keyboard['process'].pid, SIGTERM)
+        if 'kbd' in self.keyboard:
+            self.keyboard['box'].remove(self.keyboard['kbd'])
         box.remove(self.keyboard['box'])
         self.keyboard = None
         if entry:
